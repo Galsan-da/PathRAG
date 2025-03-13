@@ -562,10 +562,11 @@ class PathRAG:
             tasks.append(cast(StorageNameSpace, storage_inst).index_done_callback())
         await asyncio.gather(*tasks)
 
+    @staticmethod
     def custom_embedding(texts):
         api_key = os.getenv("Authorization_key")
         if not api_key:
-           raise ValueError("Authorization_key is not set.")
+            raise ValueError("Authorization_key is not set.")
 
         embeddings = GigaChatEmbeddings(credentials=api_key, verify_ssl_certs=False)
         return embeddings.embed_documents(texts)
