@@ -5,7 +5,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from functools import partial
 from typing import Type, cast
-from langchain_gigachat.embeddings import GigaChatEmbeddings
+
 
 
 from .llm import (
@@ -108,19 +108,6 @@ class PathRAG:
     working_dir: str = field(
         default_factory=lambda: f"./PathRAG_cache_{datetime.now().strftime('%Y-%m-%d-%H:%M:%S')}"
     )
-
-    @staticmethod
-    def custom_embedding(texts):
-        """Генерация эмбеддингов через GigaChat."""
-        import os
-        from langchain_gigachat.embeddings import GigaChatEmbeddings
-
-        api_key = os.getenv("Authorization_key")
-        if not api_key:
-            raise ValueError("Authorization_key is not set.")
-
-        embeddings = GigaChatEmbeddings(credentials=api_key, verify_ssl_certs=False)
-        return embeddings.embed_documents(texts)
 
     embedding_cache_config: dict = field(
         default_factory=lambda: {

@@ -27,6 +27,7 @@ from tenacity import (
     retry_if_exception_type,
 )
 from transformers import AutoTokenizer, AutoModelForCausalLM
+from langchain_gigachat.embeddings import GigaChatEmbeddings
 
 from .utils import (
     wrap_embedding_func_with_attrs,
@@ -1025,6 +1026,19 @@ class MultiModel:
 
         return await next_model.gen_func(**args)
 
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=4, max=60),
+    retry=retry_if_exception_type((RateLimitError, APIConnectionError, Timeout)),
+)
+async def custom_embedding(texts):
+    """Асинхронная генерация эмбеддингов через GigaChat."""
+    api_key = os.getenv("Authorization_key")
+    if not api_key:
+        raise ValueError("Authorization_key is not set.")
+
+    embeddings = GigaChatEmbeddings(credentials=api_key, verify_ssl_certs=False)
+    return await embeddings.aembed_documents(texts)
 
 if __name__ == "__main__":
     import asyncio
