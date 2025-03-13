@@ -27,7 +27,6 @@ from tenacity import (
     retry_if_exception_type,
 )
 from transformers import AutoTokenizer, AutoModelForCausalLM
-from langchain_gigachat.embeddings import GigaChatEmbeddings
 
 from .utils import (
     wrap_embedding_func_with_attrs,
@@ -1033,6 +1032,11 @@ class MultiModel:
 )
 async def custom_embedding(texts):
     """Асинхронная генерация эмбеддингов через GigaChat."""
+    from langchain_gigachat.embeddings import GigaChatEmbeddings
+    from dotenv import load_dotenv
+    # Загрузка переменных окружения
+    load_dotenv()
+
     api_key = os.getenv("Authorization_key")
     if not api_key:
         raise ValueError("Authorization_key is not set.")
