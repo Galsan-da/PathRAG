@@ -564,6 +564,10 @@ class PathRAG:
 
     @staticmethod
     def custom_embedding(texts):
+        """Генерация эмбеддингов через GigaChat."""
+        import os
+        from langchain_gigachat.embeddings import GigaChatEmbeddings
+
         api_key = os.getenv("Authorization_key")
         if not api_key:
             raise ValueError("Authorization_key is not set.")
