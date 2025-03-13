@@ -56,7 +56,7 @@ def lazy_external_import(module_name: str, class_name: str):
     def import_class(*args, **kwargs):
         import importlib
 
-  
+
         module = importlib.import_module(module_name, package=package)
 
 
@@ -151,8 +151,8 @@ class PathRAG:
     embedding_func_max_async: int = 16
 
 
-    llm_model_func: callable = gpt_4o_mini_complete  
-    llm_model_name: str = "meta-llama/Llama-3.2-1B-Instruct"  
+    llm_model_func: callable = gpt_4o_mini_complete
+    llm_model_name: str = "meta-llama/Llama-3.2-1B-Instruct"
     llm_model_max_token_size: int = 32768
     llm_model_max_async: int = 16
     llm_model_kwargs: dict = field(default_factory=dict)
@@ -272,7 +272,7 @@ class PathRAG:
         }
 
     def insert(self, string_or_strings):
-        
+
         loop = always_get_an_event_loop()
         return loop.run_until_complete(self.ainsert(string_or_strings))
 
@@ -384,7 +384,7 @@ class PathRAG:
             if self.text_chunks is not None and all_chunks_data:
                 await self.text_chunks.upsert(all_chunks_data)
 
- 
+
             all_entities_data = []
             for entity_data in custom_kg.get("entities", []):
                 entity_name = f'"{entity_data["entity_name"].upper()}"'
@@ -494,11 +494,11 @@ class PathRAG:
         finally:
             if update_storage:
                 await self._insert_done()
-    
+
     def query(self, query: str, param: QueryParam = QueryParam()):
         loop = always_get_an_event_loop()
         return loop.run_until_complete(self.aquery(query, param))
-    
+
     async def aquery(self, query: str, param: QueryParam = QueryParam()):
         if param.mode in ["hybrid"]:
             response= await kg_query(
@@ -522,7 +522,7 @@ class PathRAG:
         await self._query_done()
         return response
 
-        
+
     async def _query_done(self):
         tasks = []
         for storage_inst in [self.llm_response_cache]:
@@ -562,11 +562,10 @@ class PathRAG:
             tasks.append(cast(StorageNameSpace, storage_inst).index_done_callback())
         await asyncio.gather(*tasks)
 
-   def custom_embedding(texts):
-    api_key = os.getenv("Authorization_key")
-    if not api_key:
-        raise ValueError("Authorization_key is not set.")
-    
-    embeddings = GigaChatEmbeddings(credentials=api_key, verify_ssl_certs=False)
-    return embeddings.embed_documents(texts)
+    def custom_embedding(texts):
+        api_key = os.getenv("Authorization_key")
+        if not api_key:
+           raise ValueError("Authorization_key is not set.")
 
+        embeddings = GigaChatEmbeddings(credentials=api_key, verify_ssl_certs=False)
+        return embeddings.embed_documents(texts)

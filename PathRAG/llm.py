@@ -155,7 +155,7 @@ async def azure_openai_complete_if_cache(
 @retry(
     stop=stop_after_attempt(5),
     wait=wait_exponential(multiplier=1, max=60),
-    retry=retry_if_exception_type((BedrockError)),
+    #retry=retry_if_exception_type((BedrockError)),
 )
 async def bedrock_complete_if_cache(
     model,
@@ -215,7 +215,7 @@ async def bedrock_complete_if_cache(
         try:
             response = await bedrock_async_client.converse(**args, **kwargs)
         except Exception as e:
-            raise BedrockError(e)
+            raise RuntimeError(f"Error in Bedrock API call: {e}")
 
     return response["output"]["message"]["content"][0]["text"]
 
@@ -493,7 +493,7 @@ async def nvidia_openai_complete(
 ) -> str:
     keyword_extraction = kwargs.pop("keyword_extraction", None)
     result = await openai_complete_if_cache(
-        "nvidia/llama-3.1-nemotron-70b-instruct", 
+        "nvidia/llama-3.1-nemotron-70b-instruct",
         prompt,
         system_prompt=system_prompt,
         history_messages=history_messages,
@@ -577,7 +577,7 @@ async def ollama_model_complete(
 )
 async def zhipu_complete_if_cache(
     prompt: Union[str, List[Dict[str, str]]],
-    model: str = "glm-4-flashx", 
+    model: str = "glm-4-flashx",
     api_key: Optional[str] = None,
     system_prompt: Optional[str] = None,
     history_messages: List[Dict[str, str]] = [],
@@ -798,9 +798,9 @@ async def nvidia_openai_embedding(
     model: str = "nvidia/llama-3.2-nv-embedqa-1b-v1",
     base_url: str = "https://integrate.api.nvidia.com/v1",
     api_key: str = None,
-    input_type: str = "passage",  
-    trunc: str = "NONE",  
-    encode: str = "float",  
+    input_type: str = "passage",
+    trunc: str = "NONE",
+    encode: str = "float",
 ) -> np.ndarray:
     if api_key:
         os.environ["OPENAI_API_KEY"] = api_key
@@ -913,7 +913,7 @@ async def bedrock_embedding(
                     body = json.dumps(
                         {
                             "inputText": text,
-                            
+
                             "embeddingTypes": ["float"],
                         }
                     )
@@ -1011,7 +1011,7 @@ class MultiModel:
     async def llm_model_func(
         self, prompt, system_prompt=None, history_messages=[], **kwargs
     ) -> str:
-        kwargs.pop("model", None)  
+        kwargs.pop("model", None)
         kwargs.pop("keyword_extraction", None)
         kwargs.pop("mode", None)
         next_model = self._next_model()
