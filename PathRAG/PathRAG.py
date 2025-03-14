@@ -1,16 +1,20 @@
 import asyncio
 import os
 from tqdm.asyncio import tqdm as tqdm_async
+import networkx as nx
+import numpy as np
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from functools import partial
 from typing import Type, cast
-
+from langchain_gigachat.embeddings import GigaChatEmbeddings
 
 
 from .llm import (
     gpt_4o_mini_complete,
     openai_embedding,
+    EmbeddingWrapper,
+    custom_embedding
 )
 from .operate import (
     chunking_by_token_size,
@@ -102,9 +106,65 @@ def always_get_an_event_loop() -> asyncio.AbstractEventLoop:
         asyncio.set_event_loop(new_loop)
         return new_loop
 
+def create_graph_from_chunks(chunks, embeddings):
+    """Создает граф знаний из текстовых фрагментов с семантическими связями."""
+    graph = nx.DiGraph()
+    embeddings_dict = {i: embeddings.embed_query(chunk) for i, chunk in enumerate(chunks)}
+
+    for i, chunk in enumerate(chunks):
+        graph.add_node(i, text=chunk)
+
+    for i in range(len(chunks)):
+        for j in range(i + 1, len(chunks)):
+            similarity = cosine_similarity(embeddings_dict[i], embeddings_dict[j])
+            if similarity > 0.7:
+                graph.add_edge(i, j, weight=similarity)
+
+    return graph
+
+
+def flow_based_pruning(graph, start_node, end_node, alpha=0.8, theta=0.05):
+    """Алгоритм обрезки путей: убирает слабые семантические связи и выделяет ключевые пути."""
+    resources = {node: 0 for node in graph.nodes}
+    resources[start_node] = 1.0
+
+    for node in nx.topological_sort(graph):
+        if node == start_node:
+            continue
+        for predecessor in graph.predecessors(node):
+            successors = list(graph.successors(predecessor))
+            if len(successors) == 0:
+                continue
+            resources[node] += alpha * resources[predecessor] / len(successors)
+
+        current_successors = list(graph.successors(node))
+        if len(current_successors) == 0:
+            resources[node] = 0
+        else:
+            if resources[node] / len(current_successors) < theta:
+                resources[node] = 0
+
+    paths = list(nx.all_simple_paths(graph, start_node, end_node))
+    paths_with_scores = [(path, sum(resources[node] for node in path) / len(path)) for path in paths]
+    return sorted(paths_with_scores, key=lambda x: x[1], reverse=True)[:5]
+
+
+def paths_to_text(graph, paths_with_scores):
+    """Конвертирует пути графа в читаемый текст."""
+    return "\n".join(
+        f"Path (Score: {score:.2f}): {' -> '.join(graph.nodes[node]['text'] for node in path)}"
+        for path, score in paths_with_scores
+    )
+
+
+def cosine_similarity(vec1, vec2):
+    """Вычисляет косинусное сходство между двумя векторами."""
+    return np.dot(vec1, vec2) / (np.linalg.norm(vec1) * np.linalg.norm(vec2))
+
 
 @dataclass
 class PathRAG:
+    api_key: str
     working_dir: str = field(
         default_factory=lambda: f"./PathRAG_cache_{datetime.now().strftime('%Y-%m-%d-%H:%M:%S')}"
     )
@@ -148,7 +208,7 @@ class PathRAG:
 
     embedding_func: EmbeddingFunc = field(default_factory=lambda: openai_embedding)
     embedding_batch_num: int = 32
-    embedding_func_max_async: int = 16
+    embedding_func_max_async: int = 3
 
 
     llm_model_func: callable = gpt_4o_mini_complete
@@ -167,6 +227,9 @@ class PathRAG:
     convert_response_to_json_func: callable = convert_response_to_json
 
     def __post_init__(self):
+        if not self.api_key:
+            raise ValueError("Authorization_key must be provided when initializing PathRAG.")
+
         log_file = os.path.join("PathRAG.log")
         set_logger(log_file)
         logger.setLevel(self.log_level)
@@ -183,6 +246,17 @@ class PathRAG:
         self.graph_storage_cls: Type[BaseGraphStorage] = self._get_storage_class()[
             self.graph_storage
         ]
+        # ✅ Используем EmbeddingWrapper для обоих случаев
+        # Если embedding_func не задан при создании объекта, создаем дефолтный
+        if not isinstance(self.embedding_func, EmbeddingWrapper):
+            self.embedding_func = EmbeddingWrapper(
+                func=custom_embedding,
+                dim=1024,
+                api_key=self.api_key
+            )
+
+        self.graph = nx.DiGraph()
+        self.graph_embeddings = self.embedding_func  # Используем ту же функцию и для графа
 
         if not os.path.exists(self.working_dir):
             logger.info(f"Creating working directory {self.working_dir}")
@@ -197,9 +271,9 @@ class PathRAG:
             if self.enable_llm_cache
             else None
         )
-        self.embedding_func = limit_async_func_call(self.embedding_func_max_async)(
-            self.embedding_func
-        )
+        #self.embedding_func = limit_async_func_call(self.embedding_func_max_async)(
+            #self.embedding_func
+        #)
 
 
         self.full_docs = self.key_string_value_json_storage_cls(
@@ -498,6 +572,45 @@ class PathRAG:
     def query(self, query: str, param: QueryParam = QueryParam()):
         loop = always_get_an_event_loop()
         return loop.run_until_complete(self.aquery(query, param))
+
+    async def ainsert_with_graphs(self, string_or_strings):
+        """Вставка данных и построение графа знаний."""
+        if isinstance(string_or_strings, str):
+            string_or_strings = [string_or_strings]
+
+        new_docs = {
+             compute_mdhash_id(c.strip(), prefix="doc-"): {"content": c.strip()}
+             for c in string_or_strings
+        }
+
+        # Создаем граф знаний
+        chunks = [doc["content"] for doc in new_docs.values()]
+        self.graph = create_graph_from_chunks(chunks, self.graph_embeddings)
+
+        # Извлекаем семантические пути
+        paths_with_scores = flow_based_pruning(self.graph, 0, len(chunks) - 1)
+        path_text = paths_to_text(self.graph, paths_with_scores)
+
+        logger.info("🔗 Извлеченные пути из графа знаний:")
+        logger.info(path_text)
+
+        # Сохраняем данные в векторную базу
+        await self.chunks_vdb.upsert(new_docs)
+
+    async def aquery_with_graphs(self, query: str, param: QueryParam = QueryParam()):
+        """Поиск через векторную базу + семантические графы."""
+        docs = await self.chunks_vdb.query(query, top_k=10)
+        chunks = [doc["content"] for doc in docs]
+
+        # Построение графа из результатов поиска
+        self.graph = create_graph_from_chunks(chunks, self.graph_embeddings)
+        paths_with_scores = flow_based_pruning(self.graph, 0, len(chunks) - 1)
+        path_text = paths_to_text(self.graph, paths_with_scores)
+
+        logger.info("🔍 Найденные семантические пути:")
+        logger.info(path_text)
+
+        return f"🔍 Найденные пути:\n{path_text}"
 
     async def aquery(self, query: str, param: QueryParam = QueryParam()):
         if param.mode in ["hybrid"]:

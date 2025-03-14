@@ -86,11 +86,14 @@ class NanoVectorDBStorage(BaseVectorStorage):
             return []
         list_data = [
             {
-                "__id__": k,
-                **{k1: v1 for k1, v1 in v.items() if k1 in self.meta_fields},
+              "__id__": k,
+              "content": v.get("content", ""),
+              **{k1: v1 for k1, v1 in v.items() if k1 in self.meta_fields},
             }
             for k, v in data.items()
         ]
+        logger.info(f"Data being upserted into NanoVectorDBStorage: {list_data}")
+
         contents = [v["content"] for v in data.values()]
         batches = [
             contents[i : i + self._max_batch_size]
@@ -106,7 +109,15 @@ class NanoVectorDBStorage(BaseVectorStorage):
         pbar = tqdm_async(
             total=len(embedding_tasks), desc="Generating embeddings", unit="batch"
         )
-        embeddings_list = await asyncio.gather(*embedding_tasks)
+
+        semaphore = asyncio.Semaphore(2)  # Одновременно не больше 2 задач
+
+        async def limited_task(task):
+            async with semaphore:
+                return await task
+
+        # Используем asyncio.gather для выполнения всех задач
+        embeddings_list = await asyncio.gather(*[limited_task(task) for task in embedding_tasks])
 
         embeddings = np.concatenate(embeddings_list)
         if len(embeddings) == len(list_data):
@@ -129,8 +140,11 @@ class NanoVectorDBStorage(BaseVectorStorage):
             better_than_threshold=self.cosine_better_than_threshold,
         )
         results = [
-            {**dp, "id": dp["__id__"], "distance": dp["__metrics__"]} for dp in results
+            {**dp, "id": dp["__id__"],
+            "distance": dp["__metrics__"],
+            "content": dp.get("content", "No content available")} for dp in results
         ]
+        logger.info(f"Retrieved results from NanoVectorDBStorage: {results}")
         return results
 
     @property
@@ -290,7 +304,7 @@ class NetworkXStorage(BaseGraphStorage):
         if self._graph.has_node(source_node_id):
             return list(self._graph.out_edges(source_node_id))
         return None
-    
+
     async def get_pagerank(self,source_node_id:str):
         pagerank_list=nx.pagerank(self._graph)
         if source_node_id in pagerank_list:
@@ -334,7 +348,7 @@ class NetworkXStorage(BaseGraphStorage):
 
         nodes_ids = [self._graph.nodes[node_id]["id"] for node_id in nodes]
         return embeddings, nodes_ids
-    
+
     async def edges(self):
         return self._graph.edges()
     async def nodes(self):

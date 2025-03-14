@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import copy
 import json
@@ -27,6 +28,7 @@ from tenacity import (
     retry_if_exception_type,
 )
 from transformers import AutoTokenizer, AutoModelForCausalLM
+
 
 from .utils import (
     wrap_embedding_func_with_attrs,
@@ -1025,24 +1027,53 @@ class MultiModel:
 
         return await next_model.gen_func(**args)
 
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=4, max=60),
-    retry=retry_if_exception_type((RateLimitError, APIConnectionError, Timeout)),
-)
-async def custom_embedding(texts):
-    """Асинхронная генерация эмбеддингов через GigaChat."""
-    from langchain_gigachat.embeddings import GigaChatEmbeddings
-    from dotenv import load_dotenv
-    # Загрузка переменных окружения
-    load_dotenv()
+from tenacity import retry, stop_after_attempt, wait_exponential
+from langchain_gigachat.embeddings import GigaChatEmbeddings
+import aiohttp
 
-    api_key = os.getenv("Authorization_key")
+# Ретраи для 429 и ошибок сети
+@retry(
+    stop=stop_after_attempt(10),
+    wait=wait_exponential(multiplier=1, max=120),
+)
+async def custom_embedding(texts, api_key):
+    """Асинхронная генерация эмбеддингов через GigaChat с ретраем на 429."""
     if not api_key:
         raise ValueError("Authorization_key is not set.")
 
     embeddings = GigaChatEmbeddings(credentials=api_key, verify_ssl_certs=False)
-    return await embeddings.aembed_documents(texts)
+
+    try:
+        result = await embeddings.aembed_documents(texts)
+        print(f"✅ Эмбеддинги сгенерированы: {len(result)}")
+        return result
+    except aiohttp.ClientResponseError as e:
+        if e.status == 429:
+            print("🔥 Получен 429 Too Many Requests — повторная попытка...")
+            raise
+        else:
+            print(f"❌ HTTP ошибка: {e.status}, текст ошибки: {await e.text()}")
+            raise
+    except Exception as e:
+        print(f"❗ Непредвиденная ошибка: {e}")
+        raise
+
+
+class EmbeddingWrapper:
+    def __init__(self, func, dim, api_key):
+        self.embedding_dim = dim
+        self.func = func
+        self.api_key = api_key
+
+    async def __call__(self, texts):
+        # Передаем api_key автоматически
+        return await self.func(texts, self.api_key)
+
+    def embed_query(self, text):
+        """Синхронная функция для генерации эмбеддинга — поддержка для графов."""
+        loop = asyncio.get_event_loop()
+        return loop.run_until_complete(self.func([text], self.api_key))[0]
+
 
 if __name__ == "__main__":
     import asyncio
